@@ -445,6 +445,8 @@ def process(job: Job, src_cfg: dict | None = None, image: Path | None = None, ma
         job.description = an["job_text"]
     if an.get("company") and job.company in ("", "Unknown"):
         job.company = an["company"]
+    if an.get("title") and job.source in ("manual", "screenshot") and len(an["title"]) <= 90:
+        job.title = an["title"]          # pasted text: its first line is often "Locations" / "Description" — the AI knows better
     if an.get("title") and (not job.title or re.fullmatch(r"\s*(job )?description|about( the)? (job|role)|תיאור( ה?משרה| התפקיד)?|דרישות( התפקיד)?|"
                                                          r"[^|]*\|[^|]*recruit[^|]*", job.title, re.I)):
         job.title = an["title"]
