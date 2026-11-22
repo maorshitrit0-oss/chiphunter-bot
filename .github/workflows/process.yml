@@ -15,6 +15,7 @@ on:
         required: false
         default: "-"
   schedule:
+    - cron: "23 * * * *"      # hourly full scan (public repo = no minute limit); the Worker covers the minutes in between
     - cron: "41 6 * * *"      # daily checks (09:41 Israel)
     - cron: "7 18 * * 6"      # Saturday-night summary (summer time)
     - cron: "7 19 * * 6"      # Saturday-night summary (winter time; the code checks Israel time)
@@ -38,7 +39,7 @@ jobs:
       GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
       GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      MODE: ${{ github.event_name == 'schedule' && (github.event.schedule == '41 6 * * *' && 'remind' || 'weekly') || inputs.mode }}
+      MODE: ${{ github.event_name == 'schedule' && (github.event.schedule == '41 6 * * *' && 'remind' || (github.event.schedule == '23 * * * *' && 'scan' || 'weekly')) || inputs.mode }}
       PAYLOAD: ${{ inputs.payload }}
       DATA_REPO: maorshitrit0-oss/chiphunter
     steps:
