@@ -1506,6 +1506,7 @@ def main(argv=None):
         checks["נתונים פרטיים"] = (ROOT / "data" / "applications.json").exists()
         msg = "🩺 <b>בדיקת מערכת</b>\n" + "\n".join(f"{'✅' if v else '❌'} {k}" for k, v in checks.items())
         telegram.send(msg) if telegram.enabled() else print(msg)
+        print({k: bool(v) for k, v in checks.items()})
     elif cmd == "general_cv":        # general_cv en|he|both
         for lg in (["en", "he"] if len(argv) < 2 or argv[1] in ("both", "-") else [argv[1]]):
             send_general_cv(lg)
