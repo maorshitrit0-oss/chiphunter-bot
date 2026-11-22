@@ -205,7 +205,74 @@ async function scanComeet([company, slug, uid]) {
     });
 }
 
+// ---------------------------------------------------------------- fast chat (answers in seconds, no GitHub run)
+// The Worker reads Maor's tracker from the private data repo, asks Gemini, answers right away, and only when something
+// has to be DONE (record an application, build a CV, analyze a job...) hands the actions to GitHub in the background.
+let ctxCache = { at: 0, data: null };
+async function ghFile(env, path) {
+  const repo = env.DATA_REPO || "maorshitrit0-oss/chiphunter";
+  const r = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
+    headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github.raw", "User-Agent": "chiphunter-worker" } });
+  if (!r.ok) throw new Error(`data ${path} ${r.status}`);
+  return r.text();
+}
+async function chatContext(env) {
+  if (ctxCache.data && Date.now() - ctxCache.at < 45000) return ctxCache.data;
+  const [apps, last, prof, prompt, taste] = await Promise.all([
+    ghFile(env, "data/applications.json"), ghFile(env, "data/last_job.json").catch(() => "{}"),
+    ghFile(env, "profile/profile.json"), ghFile(env, "prompts/chat.md"), ghFile(env, "data/taste.json").catch(() => "{}")]);
+  const since = new Date(Date.now() - 75 * 86400000).toISOString().slice(0, 10);
+  const slim = JSON.parse(apps).applications
+    .filter((a) => (a.status !== "skipped" || a.skipped_by === "maor" || a.source === "manual") && (a.found_date || "") >= since)
+    .map((a) => ({ id: a.id, company: a.company, title: a.title, status: a.status, applied_date: a.applied_date,
+      channel: a.channel, referrer: a.referrer, found_date: a.found_date, url: a.url, notes: (a.notes || "").slice(0, 140) }));
+  ctxCache = { at: Date.now(), data: { slim, last, prof, prompt, taste } };
+  return ctxCache.data;
+}
+async function gemini(env, body) {
+  for (const model of (env.GEMINI_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.7-flash").split(",")) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.ok) {
+      const d = await r.json();
+      const t = (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+      if (t) return t;
+    } else console.log("gemini", model, r.status);
+  }
+  return "";
+}
+async function fastChat(env, chat, text, replyTo) {
+  if (!env.GEMINI_API_KEY) return false;
+  let c;
+  try { c = await chatContext(env); } catch (e) { console.log("ctx", e.message); return false; }
+  const hist = (await env.SEEN.get("chat:hist", "json")) || [];
+  const pendingTs = await env.SEEN.get("pending_job");
+  const pending = pendingTs && Date.now() - Number(pendingTs) < 6 * 60 * 1000 ? pendingTs : "";
+  const files = `message.txt:\n${text}\n\nhistory.json:\n${JSON.stringify(hist.slice(-16))}\n\nlast_job.json:\n${c.last}\n\n` +
+    `applications.json (last ~75 days):\n${JSON.stringify(c.slim)}\n\ntaste.json:\n${c.taste}\n\nprofile.json:\n${c.prof}\n\n` +
+    (pending ? "NOTE: a job he just sent is still being analyzed; if he says he applied, record it for that job (use last_job / the newest one).\n" : "") +
+    "Answer with the JSON object only (reply.json content).";
+  const out = await gemini(env, { systemInstruction: { parts: [{ text: c.prompt }] },
+    contents: [{ role: "user", parts: [{ text: files }] }],
+    generationConfig: { responseMimeType: "application/json", temperature: 0.4 } });
+  let res;
+  try { res = JSON.parse(out.replace(/^```(json)?|```$/g, "").trim()); } catch (e) { console.log("json", out.slice(0, 200)); return false; }
+  const reply = String(res.reply_he || "").trim();
+  const actions = (res.actions || []).slice(0, 3);
+  const heavy = actions.length > 0;
+  if (reply) {
+    const r = await tg(env, "sendMessage", { chat_id: chat, text: reply.slice(0, 4000), parse_mode: "HTML", reply_to_message_id: replyTo });
+    if (!r.ok) await tg(env, "sendMessage", { chat_id: chat, text: reply.replace(/<[^>]+>/g, "").slice(0, 4000) });
+  }
+  if (heavy) await dispatch(env, "act", JSON.stringify({ actions, message: text.slice(0, 4000), reply, pending }));
+  hist.push({ from: "maor", text: text.slice(0, 1500) }, { from: "bot", text: reply.slice(0, 1500) });
+  await env.SEEN.put("chat:hist", JSON.stringify(hist.slice(-30)), { expirationTtl: 30 * 86400 });
+  if (heavy) ctxCache.at = 0;
+  return true;
+}
+
 async function dispatch(env, mode, payload) {
+  if (env.DRY) { console.log("DISPATCH", mode, String(payload).slice(0, 400)); return; }
   const r = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/process.yml/dispatches`, {
     method: "POST",
     headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json",
@@ -406,8 +473,10 @@ async function onTelegram(env, update, ctx) {
     let said = "";
     try { said = await transcribe(env, (m.voice || m.audio).file_id); } catch (e) { console.log("stt", e.message); }
     if (!said) return reply("לא הצלחתי לשמוע את ההקלטה 🙉 נסה שוב או כתוב לי.");
+    await tg(env, "sendChatAction", { chat_id: chat, action: "typing" });
+    if (await fastChat(env, chat, said, m.message_id)) return;
     await dispatch(env, "chat", await chatPayload(env, said));
-    return reply(`🎙️ שמעתי: "${said.slice(0, 300)}"\n⏳ חושב...`);
+    return reply("⏳ חושב...");
   }
   if (m.photo?.length) {
     // Screenshots go to the same "brain" as text. Several photos sent together (an album) = ONE message.
@@ -462,7 +531,9 @@ async function onTelegram(env, update, ctx) {
   }
   const looksLikeJob = text.length > 400 || /דרישות|תיאור המשרה|requirements|responsibilities|qualifications|what you'll be doing/i.test(text);
   if (text && !looksLikeJob && !text.startsWith("/")) {
-    await dispatch(env, "chat", await chatPayload(env, text));
+    await tg(env, "sendChatAction", { chat_id: chat, action: "typing" });
+    if (await fastChat(env, chat, text, m.message_id)) return;      // answers in seconds
+    await dispatch(env, "chat", await chatPayload(env, text));         // fallback: the full brain on GitHub
     return reply("⏳ חושב...");
   }
   if (looksLikeJob || text.length > 80) {

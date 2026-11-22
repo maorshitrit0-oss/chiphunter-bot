@@ -820,7 +820,38 @@ def chat_turn(message: str, image_paths: list | None = None):
         telegram.send(msg) if telegram.enabled() else print(msg)
         return
     reply = res.get("reply_he", "").strip()
-    actions = res.get("actions", [])[:3]
+    done, buttons, job_card = run_actions(res.get("actions", [])[:3], image_paths)
+    _send_turn(reply, done, buttons, job_card, message, image_paths)
+
+
+def act_turn(payload: str):
+    """The Worker already answered Maor (fast, in seconds) and decided what to do — here we only DO it
+    (record, build a CV, analyze a job...) and report what was done."""
+    d = json.loads(payload)
+    if d.get("pending"):
+        _wait_for_job(int(d["pending"]))
+    done, buttons, job_card = run_actions(d.get("actions", [])[:3], None)
+    _send_turn("", done, buttons, True, d.get("message", ""), None, reply_for_history=d.get("reply", ""))
+
+
+def _send_turn(reply, done, buttons, job_card, message, image_paths, reply_for_history=""):
+    text = "\n\n".join(x for x in ([reply] if not job_card else []) + (["\n".join(done)] if done else []) if x)
+    if text and telegram.enabled():
+        try:
+            telegram.send(text, buttons)
+        except Exception:
+            telegram.send(e(re.sub(r"<[^>]+>", "", text)), buttons)
+    elif text:
+        print(text)
+    hist = json.loads(CHAT_HISTORY.read_text(encoding="utf-8")) if CHAT_HISTORY.exists() else []
+    now = date.today().isoformat()
+    said = message + (f" [שלח {len(image_paths)} צילומי מסך]" if image_paths else "")
+    hist += [{"from": "maor", "text": said[:2000], "date": now},
+             {"from": "bot", "text": (reply_for_history or reply or text)[:2000], "date": now}]
+    CHAT_HISTORY.write_text(json.dumps(hist[-40:], ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def run_actions(actions: list, image_paths=None):
     done, buttons, job_card = [], None, False
     for act in actions:
         t = act.get("type")
@@ -895,19 +926,7 @@ def chat_turn(message: str, image_paths: list | None = None):
                 insights(force=True, send=True, min_cases=1)
         except Exception as ex:
             print(f"[chat] action {t} failed: {ex}", file=sys.stderr)
-    # ONE message: the reply + what was actually done (+ buttons). A job card is its own answer.
-    text = "\n\n".join(x for x in ([reply] if not job_card else []) + (["\n".join(done)] if done else []) if x)
-    if text and telegram.enabled():
-        try:
-            telegram.send(text, buttons)
-        except Exception:
-            telegram.send(e(re.sub(r"<[^>]+>", "", text)), buttons)
-    elif text:
-        print(text)
-    now = date.today().isoformat()
-    said = message + (f" [שלח {len(image_paths)} צילומי מסך]" if image_paths else "")
-    hist += [{"from": "maor", "text": said[:2000], "date": now}, {"from": "bot", "text": (reply or text)[:2000], "date": now}]
-    CHAT_HISTORY.write_text(json.dumps(hist[-40:], ensure_ascii=False, indent=1), encoding="utf-8")
+    return done, buttons, job_card
 
 
 def weekly_summary(force=False):
@@ -1494,6 +1513,8 @@ def main(argv=None):
         chat_turn(" ".join(argv[1:]))
     elif cmd == "weekly":            # weekly [force]
         weekly_summary(force=len(argv) > 1 and argv[1] == "force")
+    elif cmd == "act":               # actions decided by the Worker's fast chat
+        act_turn(argv[1])
     elif cmd == "health":            # one message: is every connection alive?
         from . import llm
         checks = {"טלגרם": telegram.enabled()}

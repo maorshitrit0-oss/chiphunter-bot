@@ -39,6 +39,7 @@ jobs:
       GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
       GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
       MODE: ${{ github.event_name == 'schedule' && (github.event.schedule == '41 6 * * *' && 'remind' || (github.event.schedule == '23 * * * *' && 'scan' || 'weekly')) || inputs.mode }}
       PAYLOAD: ${{ inputs.payload }}
       DATA_REPO: maorshitrit0-oss/chiphunter
@@ -65,7 +66,7 @@ jobs:
       - name: Install
         run: |
           pip install -q -r requirements.txt > /dev/null
-          if [[ "$MODE" =~ ^(jobs|url|text|image|scan|interview|chat|general_cv)$ ]] || [[ "$MODE" == status && "$PAYLOAD" == interview:* ]]; then
+          if [[ "$MODE" =~ ^(jobs|url|text|image|scan|interview|chat|general_cv|act)$ ]] || [[ "$MODE" == status && "$PAYLOAD" == interview:* ]]; then
             python -m playwright install --with-deps chromium > /dev/null 2>&1
             sudo apt-get install -y -qq fonts-noto-core fonts-noto-ui-core > /dev/null 2>&1
           fi
@@ -77,7 +78,7 @@ jobs:
           case "$MODE" in
             jobs)  printf '%s' "$PAYLOAD" > /tmp/jobs.json && python -m chiphunter.pipeline jobs /tmp/jobs.json ;;
             text)  printf '%s' "$PAYLOAD" > /tmp/job.txt  && python -m chiphunter.pipeline text /tmp/job.txt ;;
-            url|image|status|library|interview|branding|referrer|chat|weekly|general_cv) python -m chiphunter.pipeline "$MODE" "$PAYLOAD" ;;
+            url|image|status|library|interview|branding|referrer|chat|weekly|general_cv|act|wprobe) python -m chiphunter.pipeline "$MODE" "$PAYLOAD" ;;
             transcript) python -m chiphunter.pipeline transcript $PAYLOAD ;;
             scan)  python -m chiphunter.pipeline scan "$PAYLOAD" ;;
             *)     python -m chiphunter.pipeline "$MODE" ;;
