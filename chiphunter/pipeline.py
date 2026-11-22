@@ -1492,6 +1492,20 @@ def main(argv=None):
         chat_turn(" ".join(argv[1:]))
     elif cmd == "weekly":            # weekly [force]
         weekly_summary(force=len(argv) > 1 and argv[1] == "force")
+    elif cmd == "health":            # one message: is every connection alive?
+        from . import llm
+        checks = {"טלגרם": telegram.enabled()}
+        try:
+            checks["Google Drive"] = drive.enabled() and drive.auth_ok()
+        except Exception:
+            checks["Google Drive"] = False
+        try:
+            checks["AI (Gemini)"] = bool(llm.run('Write ok.json with {"ok": true}', {}, "ok.json", timeout=60))
+        except Exception:
+            checks["AI (Gemini)"] = False
+        checks["נתונים פרטיים"] = (ROOT / "data" / "applications.json").exists()
+        msg = "🩺 <b>בדיקת מערכת</b>\n" + "\n".join(f"{'✅' if v else '❌'} {k}" for k, v in checks.items())
+        telegram.send(msg) if telegram.enabled() else print(msg)
     elif cmd == "general_cv":        # general_cv en|he|both
         for lg in (["en", "he"] if len(argv) < 2 or argv[1] in ("both", "-") else [argv[1]]):
             send_general_cv(lg)
