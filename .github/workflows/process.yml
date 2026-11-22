@@ -1,0 +1,116 @@
+name: process
+# Runs in the PUBLIC code repo (free, unlimited GitHub Actions minutes). All personal data — profile, CVs, tracker,
+# prompts, logs — lives in the PRIVATE data repo and is checked out into priv/ for each run. Run output is not printed
+# here (public logs); it is saved in the private repo under logs/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "mode"
+        required: true
+        default: scan
+      payload:
+        description: "payload"
+        required: false
+        default: "-"
+  schedule:
+    - cron: "41 6 * * *"      # daily checks (09:41 Israel)
+    - cron: "7 18 * * 6"      # Saturday-night summary (summer time)
+    - cron: "7 19 * * 6"      # Saturday-night summary (winter time; the code checks Israel time)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-${{ inputs.mode == 'scan' && 'scan' || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.repository_owner == 'maorshitrit0-oss'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+      GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MODE: ${{ github.event_name == 'schedule' && (github.event.schedule == '41 6 * * *' && 'remind' || 'weekly') || inputs.mode }}
+      PAYLOAD: ${{ inputs.payload }}
+      DATA_REPO: maorshitrit0-oss/chiphunter
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Private data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DATA_REPO }}
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: priv
+
+      - name: Link data
+        run: |
+          for d in data profile prompts; do rm -rf "$d"; ln -s "priv/$d" "$d"; done
+          mkdir -p priv/logs
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -q -r requirements.txt > /dev/null
+          if [[ "$MODE" =~ ^(jobs|url|text|image|scan|interview|chat|general_cv)$ ]] || [[ "$MODE" == status && "$PAYLOAD" == interview:* ]]; then
+            python -m playwright install --with-deps chromium > /dev/null 2>&1
+            sudo apt-get install -y -qq fonts-noto-core fonts-noto-ui-core > /dev/null 2>&1
+          fi
+          cp data/applications.json /tmp/base.json
+
+      - name: Run (output goes to the private repo, not to this public log)
+        run: |
+          set +e
+          case "$MODE" in
+            jobs)  printf '%s' "$PAYLOAD" > /tmp/jobs.json && python -m chiphunter.pipeline jobs /tmp/jobs.json ;;
+            text)  printf '%s' "$PAYLOAD" > /tmp/job.txt  && python -m chiphunter.pipeline text /tmp/job.txt ;;
+            url|image|status|library|interview|branding|referrer|chat|weekly|general_cv) python -m chiphunter.pipeline "$MODE" "$PAYLOAD" ;;
+            transcript) python -m chiphunter.pipeline transcript $PAYLOAD ;;
+            scan)  python -m chiphunter.pipeline scan "$PAYLOAD" ;;
+            *)     python -m chiphunter.pipeline "$MODE" ;;
+          esac > /tmp/run.log 2>&1
+          rc=$?
+          echo "mode=$MODE exit=$rc"
+          { echo "=== $(date -u +%FT%TZ) mode=$MODE exit=$rc run=$GITHUB_RUN_ID"; tail -c 60000 /tmp/run.log; } > "priv/logs/last_${MODE}.log"
+          if [ $rc -ne 0 ]; then
+            { echo "=== $(date -u +%FT%TZ) mode=$MODE exit=$rc"; tail -n 60 /tmp/run.log; } >> priv/logs/errors.log
+            tail -n 1500 priv/logs/errors.log > /tmp/e && mv /tmp/e priv/logs/errors.log
+          fi
+          exit $rc
+
+      - name: Save tracker (merge with parallel runs, retry)
+        if: always()
+        run: |
+          cd priv
+          git config user.name "chiphunter-bot"
+          git config user.email "chiphunter-bot@users.noreply.github.com"
+          for i in 1 2 3 4 5 6; do
+            cp data/applications.json /tmp/ours.json
+            cp data/events.json /tmp/ev_ours.json 2>/dev/null || echo "[]" > /tmp/ev_ours.json
+            cp data/private_refs.json /tmp/refs.json 2>/dev/null || true
+            git fetch -q origin main
+            git checkout -q origin/main -- data/applications.json data/events.json 2>/dev/null || true
+            python -c "import json,os;p='data/events.json';t=json.load(open(p)) if os.path.exists(p) else [];o=json.load(open('/tmp/ev_ours.json'));k=lambda e:json.dumps(e,sort_keys=True,ensure_ascii=False);s={k(e) for e in t};json.dump((t+[e for e in o if k(e) not in s])[-400:],open(p,'w'),ensure_ascii=False,indent=1)"
+            PYTHONPATH=$GITHUB_WORKSPACE python -m chiphunter.merge /tmp/ours.json data/applications.json data/applications.json /tmp/base.json
+            if [ -f /tmp/refs.json ]; then cp /tmp/refs.json data/private_refs.json; fi
+            git add data/ profile/profile.json logs/
+            git diff --cached --quiet && exit 0
+            git commit -qm "chiphunter: $MODE"
+            git rebase -q -X theirs origin/main 2>/dev/null || git rebase --abort
+            git push -q origin HEAD:main && exit 0
+            git reset -q --soft origin/main
+            sleep $((i * 3))
+          done
+          exit 1

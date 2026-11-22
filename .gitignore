@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+data
+profile
+prompts
+private/
+priv/
+out/
+.venv/
+worker/node_modules/
+worker/.wrangler/
+.pytest_cache/

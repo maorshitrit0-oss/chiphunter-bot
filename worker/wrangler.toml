@@ -1,0 +1,14 @@
+name = "chiphunter"
+main = "index.js"
+compatibility_date = "2025-01-01"
+
+[triggers]
+crons = ["*/2 * * * *"]
+
+[vars]
+GITHUB_REPO = "CHANGE_ME/chiphunter"
+
+# Create with:  npx wrangler kv namespace create SEEN   — then paste the id here
+[[kv_namespaces]]
+binding = "SEEN"
+id = "CHANGE_ME"
