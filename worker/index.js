@@ -257,7 +257,7 @@ async function fastChat(env, chat, text, replyTo) {
     generationConfig: { responseMimeType: "application/json", temperature: 0.4 } });
   let res;
   try { res = JSON.parse(out.replace(/^```(json)?|```$/g, "").trim()); } catch (e) { console.log("json", out.slice(0, 200)); return false; }
-  const reply = String(res.reply_he || "").trim();
+  const reply = String(res.reply_he || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/?p>/gi, "\n").trim();
   const actions = (res.actions || []).slice(0, 3);
   const heavy = actions.length > 0;
   if (reply) {

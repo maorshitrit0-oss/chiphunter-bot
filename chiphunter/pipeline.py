@@ -831,6 +831,8 @@ def act_turn(payload: str):
     if d.get("pending"):
         _wait_for_job(int(d["pending"]))
     done, buttons, job_card = run_actions(d.get("actions", [])[:3], None)
+    # the Worker already told him what's happening -> follow up only with a question (e.g. "איך הגשת?") or a problem
+    done = [x for x in done if not x.startswith("✅")] if buttons else [x for x in done if not x.startswith("✅")]
     _send_turn("", done, buttons, True, d.get("message", ""), None, reply_for_history=d.get("reply", ""))
 
 
