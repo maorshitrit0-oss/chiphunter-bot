@@ -230,14 +230,21 @@ async function chatContext(env) {
   return ctxCache.data;
 }
 async function gemini(env, body) {
-  for (const model of (env.GEMINI_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.7-flash").split(",")) {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r.ok) {
-      const d = await r.json();
-      const t = (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
-      if (t) return t;
-    } else console.log("gemini", model, r.status);
+  // fastest first; a busy model (503) or a slow answer (>15s) -> next one, so a reply never hangs
+  const models = (env.GEMINI_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.7-flash,gemini-3.8-flash").split(",");
+  for (const model of models) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const b = { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: { thinkingLevel: "low" } } };
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b), signal: ctl.signal });
+      if (r.ok) {
+        const d = await r.json();
+        const t = (d.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
+        if (t) return t;
+      } else console.log("gemini", model, r.status);
+    } catch (e) { console.log("gemini", model, e.name); } finally { clearTimeout(timer); }
   }
   return "";
 }
