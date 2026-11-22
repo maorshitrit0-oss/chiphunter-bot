@@ -1537,7 +1537,8 @@ def main(argv=None):
         reorg_library()
     elif cmd == "wprobe":
         import subprocess
-        subprocess.run(["node", str(ROOT / "tools" / "worker_probe.mjs")])
+        sys.stdout.flush()
+        subprocess.run(["node", str(ROOT / "tools" / "worker_probe.mjs"), *(argv[1].split("||") if len(argv) > 1 else [])])
     elif cmd == "probe":
         import runpy
         runpy.run_path(str(ROOT / "tools" / "probe.py"), run_name="__main__")
