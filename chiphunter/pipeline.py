@@ -756,6 +756,47 @@ def send_general_cv(lang: str = "en", transcript: bool = False):
             print(cap, f)
 
 
+def rebuild_cvs():
+    """Rebuild every tracked CV with the current cv_content.json (e.g. after Maor changed what the CV should say),
+    replace it in Drive, and send the ones waiting to be submitted again (as a reply to their job message)."""
+    from .cv.build import build_cv, CONTENT
+    lang_of = {p["id"]: p["lang"] for p in CONTENT["profiles"]}
+    apps = load_apps()["applications"]
+    done = {"todo": 0, "applied": 0, "archive": 0}
+    for a in apps:
+        if not a.get("cv_file") or not a.get("cv_profile") or a.get("cv_file", "").count("/") < 3:
+            continue
+        lang = lang_of.get(a["cv_profile"], "en")
+        tr = a.get("transcript") == "כן"
+        bucket = drive.bucket_for(a.get("status"))
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                res = build_cv(Path(td), lang, a.get("domains") or [], a.get("cv_selection") or {"profile": a["cv_profile"]},
+                               transcript_pdf(lang) if tr else None)
+                f = res["cv_with_transcript"] if tr and res.get("cv_with_transcript") else res["cv"]
+                if drive.enabled():
+                    drive.upload(f, drive.library_path(a["company"], a["title"], bucket=bucket), drive.CV_NAME)
+                if bucket == "todo" and telegram.enabled():
+                    telegram.send_document(f, caption=f"📄 <b>קו\"ח מעודכן</b> — {e(a['company'])} · {e(a['title'])}\n"
+                                                      f"📁 Drive: CV_Library/{drive.BUCKETS['todo']}/{e(drive.job_folder(a['company'], a['title']))}",
+                                           reply_to=a.get("tg_msg"))
+            done[bucket] += 1
+        except Exception as ex:
+            print(f"[rebuild] {a['company']} | {a['title']}: {ex}", file=sys.stderr)
+    for lg in ("en", "he"):          # the general CVs in CV_Library/0_כללי
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                res = build_cv(Path(td), lg, [], {"profile": GENERAL_PROFILE[lg]}, None)
+                if drive.enabled():
+                    drive.upload(res["cv"], ["0_כללי", "קורות חיים כלליים - " + ("עברית" if lg == "he" else "אנגלית")], drive.CV_NAME)
+        except Exception as ex:
+            print(f"[rebuild] general {lg}: {ex}", file=sys.stderr)
+    msg = (f"✅ <b>עדכנתי את כל קורות החיים</b> (בלי שמות קורסים וציונים בפרופיל, בלי ממוצע שנה א')\n"
+           f"📂 להגשה עכשיו: {done['todo']} · הוגשו: {done['applied']} · ארכיון: {done['archive']} · + 2 כלליים\n"
+           f"הכל הוחלף ב-Drive באותם מקומות.")
+    telegram.send(msg) if telegram.enabled() else print(msg)
+
+
 def same_job_reply(app_id, url: str = ""):
     """Maor sent a job (link / text / screenshot) that he already got — point to it instead of a second card."""
     d = load_apps()
@@ -1521,6 +1562,8 @@ def main(argv=None):
         weekly_summary(force=len(argv) > 1 and argv[1] == "force")
     elif cmd == "act":               # actions decided by the Worker's fast chat
         act_turn(argv[1])
+    elif cmd == "rebuild_cvs":
+        rebuild_cvs()
     elif cmd == "health":            # one message: is every connection alive?
         from . import llm
         checks = {"טלגרם": telegram.enabled()}

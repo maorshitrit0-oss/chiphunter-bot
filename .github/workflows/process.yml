@@ -66,7 +66,7 @@ jobs:
       - name: Install
         run: |
           pip install -q -r requirements.txt > /dev/null
-          if [[ "$MODE" =~ ^(jobs|url|text|image|scan|interview|chat|general_cv|act)$ ]] || [[ "$MODE" == status && "$PAYLOAD" == interview:* ]]; then
+          if [[ "$MODE" =~ ^(jobs|url|text|image|scan|interview|chat|general_cv|act|rebuild_cvs)$ ]] || [[ "$MODE" == status && "$PAYLOAD" == interview:* ]]; then
             python -m playwright install --with-deps chromium > /dev/null 2>&1
             sudo apt-get install -y -qq fonts-noto-core fonts-noto-ui-core > /dev/null 2>&1
           fi
@@ -78,7 +78,7 @@ jobs:
           case "$MODE" in
             jobs)  printf '%s' "$PAYLOAD" > /tmp/jobs.json && python -m chiphunter.pipeline jobs /tmp/jobs.json ;;
             text)  printf '%s' "$PAYLOAD" > /tmp/job.txt  && python -m chiphunter.pipeline text /tmp/job.txt ;;
-            url|image|status|library|interview|branding|referrer|chat|weekly|general_cv|act|wprobe) python -m chiphunter.pipeline "$MODE" "$PAYLOAD" ;;
+            url|image|status|library|interview|branding|referrer|chat|weekly|general_cv|act|wprobe|rebuild_cvs) python -m chiphunter.pipeline "$MODE" "$PAYLOAD" ;;
             transcript) python -m chiphunter.pipeline transcript $PAYLOAD ;;
             scan)  python -m chiphunter.pipeline scan "$PAYLOAD" ;;
             *)     python -m chiphunter.pipeline "$MODE" ;;
