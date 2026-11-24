@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import requests
@@ -62,6 +63,10 @@ def _gemini_models(key: str) -> list[str]:
     # newest flash first, then a fast 'lite' model, then older flash versions (they are often less loaded)
     # measured: the newest 'flash' is often overloaded/slow (503 / >75s); 'lite' answers in seconds -> lite first
     order = lite[:2] + flash[1:2] + flash[:1]
+    # older generations as a fallback: when the newest models are overloaded (503), these are usually free
+    newest = ver(usable[0]) if usable else 0
+    older = [n for n in usable if ver(n) < newest and "preview" not in n and n not in order]
+    order += [n for n in older if "lite" in n][:1] + [n for n in older if "lite" not in n][:2]
     _models_cache = order or GEMINI_PREFERRED
     print(f"[llm] gemini models: {_models_cache}", file=sys.stderr)
     return _models_cache
@@ -112,6 +117,17 @@ def _gemini(prompt: str, files: dict, out_name: str, image: Path | None, search:
     else:
         payload["generationConfig"]["responseMimeType"] = "application/json"
     per_call = 120 if search else 45
+    for rnd in range(3):        # Google's "high demand" (503) spikes pass within seconds-minutes -> try the list again
+        if rnd:
+            time.sleep(8 * rnd)
+        out = _gemini_round(key, payload, per_call)
+        if out or _last_error == "gemini_auth":
+            return out
+    return None
+
+
+def _gemini_round(key, payload, per_call):
+    global _last_error
     for model in _gemini_models(key):
         try:
             # keep "thinking" low: answers come much faster and these tasks don't need deep reasoning

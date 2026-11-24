@@ -815,8 +815,12 @@ def chat_turn(message: str, image_paths: list | None = None):
         cur = next((a for a in load_apps()["applications"] if a.get("uid") == last["uid"]), {})
         last["status"] = cur.get("status")
     res = chat(message, hist, load_apps()["applications"], last, images=image_paths)
+    if not res:                      # the AI was busy — one more try a minute later before giving up
+        import time
+        time.sleep(60)
+        res = chat(message, hist, load_apps()["applications"], last, images=image_paths)
     if not res:
-        msg = "⚠️ לא הצלחתי לענות כרגע (ה-AI לא זמין). נסה שוב בעוד דקה."
+        msg = "⚠️ שירות ה-AI של גוגל עמוס מאוד כרגע ולא הצלחתי לענות גם אחרי כמה ניסיונות. שלח שוב בעוד כמה דקות."
         telegram.send(msg) if telegram.enabled() else print(msg)
         return
     reply = res.get("reply_he", "").strip()

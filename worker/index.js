@@ -231,7 +231,8 @@ async function chatContext(env) {
 }
 async function gemini(env, body) {
   // fastest first; a busy model (503) or a slow answer (>15s) -> next one, so a reply never hangs
-  const models = (env.GEMINI_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.7-flash,gemini-3.8-flash").split(",");
+  const models = (env.GEMINI_MODELS ||
+    "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.7-flash,gemini-2.5-flash-lite,gemini-2.5-flash,gemini-3.8-flash").split(",");
   for (const model of models) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 15000);
@@ -245,6 +246,18 @@ async function gemini(env, body) {
         if (t) return t;
       } else console.log("gemini", model, r.status);
     } catch (e) { console.log("gemini", model, e.name); } finally { clearTimeout(timer); }
+  }
+  // every Gemini model busy -> Cloudflare's own free AI (already connected for voice messages)
+  if (env.AI) {
+    try {
+      const sys = body.systemInstruction?.parts?.[0]?.text || "";
+      const user = (body.contents?.[0]?.parts || []).map((p) => p.text || "").join("\n");
+      const r = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { max_tokens: 1200,
+        messages: [{ role: "system", content: sys + "\nAnswer in Hebrew. Return ONLY the JSON object." },
+                   { role: "user", content: user.slice(-24000) }] });
+      const t = typeof r?.response === "string" ? r.response : JSON.stringify(r?.response || "");
+      if (t) return t;
+    } catch (e) { console.log("workers-ai", e.message); }
   }
   return "";
 }
@@ -263,7 +276,10 @@ async function fastChat(env, chat, text, replyTo) {
     contents: [{ role: "user", parts: [{ text: files }] }],
     generationConfig: { responseMimeType: "application/json", temperature: 0.4 } });
   let res;
-  try { res = JSON.parse(out.replace(/^```(json)?|```$/g, "").trim()); } catch (e) { console.log("json", out.slice(0, 200)); return false; }
+  try {
+    const t = out.replace(/^```(json)?|```$/g, "").trim();
+    res = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
+  } catch (e) { console.log("json", out.slice(0, 200)); return false; }
   const reply = String(res.reply_he || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/?p>/gi, "\n").trim();
   const actions = (res.actions || []).slice(0, 3);
   const heavy = actions.length > 0;
